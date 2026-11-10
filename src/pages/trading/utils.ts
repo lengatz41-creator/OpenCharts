@@ -11,9 +11,13 @@ export function getPipDigits(
   const symbolDecimals = _symbolNameDecimals(symbolName);
   if (symbolInfo?.tickSize) {
     const s = String(symbolInfo.tickSize);
-    const tickDecimals = s.includes(".")
-      ? s.split(".")[1]!.replace(/0+$/, "").length || s.split(".")[1]!.length
+    // Very small ticks (memecoins) stringify as e.g. "1e-12".
+    const exp = /e-(\d+)$/.exec(s);
+    const mantissa = exp ? s.slice(0, s.indexOf("e")) : s;
+    const fracDigits = mantissa.includes(".")
+      ? mantissa.split(".")[1]!.replace(/0+$/, "").length || mantissa.split(".")[1]!.length
       : 0;
+    const tickDecimals = exp ? Number(exp[1]) + fracDigits : fracDigits;
     // Use the higher of tick-derived or symbol-name-derived so forex pairs
     // (tickSize=0.0001) still show 5 decimal places instead of 4.
     return Math.max(tickDecimals, symbolDecimals, 2);
