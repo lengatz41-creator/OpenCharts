@@ -1,0 +1,147 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © stonkmogger
+
+//@version=6
+indicator("Decision Tree Buy Signal", overlay=true)
+
+// ***** HELPER FUNCTIONS *****
+
+// Sum a series over the past 'len' bars.
+f_sum(src, len) =>
+    s = 0.0
+    for i = 0 to len - 1
+        s := s + src[i]
+    s
+
+// Average of the highest N values of 'src' over the past 'len' bars.
+f_avg_high(src, n, len) =>
+    float sum_val = 0.0
+    float[] arr = array.new_float()
+    for i = 0 to len - 1
+        array.push(arr, src[i])
+    array.sort(arr, order.descending)
+    for i = 0 to n - 1
+        sum_val += array.get(arr, i)
+    sum_val / n
+
+// Average of the lowest N values of 'src' over the past 'len' bars.
+f_avg_low(src, n, len) =>
+    float sum_val = 0.0
+    float[] arr = array.new_float()
+    for i = 0 to len - 1
+        array.push(arr, src[i])
+    array.sort(arr, order.ascending)
+    for i = 0 to n - 1
+        sum_val += array.get(arr, i)
+    sum_val / n
+
+// KST (Know Sure Thing) calculation using typical default parameters.
+f_kst() =>
+    r1 = 10, r2 = 15, r3 = 20, r4 = 30
+    s1 = 10, s2 = 10, s3 = 10, s4 = 15
+    roc1 = (close / close[r1] - 1) * 100
+    roc2 = (close / close[r2] - 1) * 100
+    roc3 = (close / close[r3] - 1) * 100
+    roc4 = (close / close[r4] - 1) * 100
+    sma1 = ta.sma(roc1, s1)
+    sma2 = ta.sma(roc2, s2)
+    sma3 = ta.sma(roc3, s3)
+    sma4 = ta.sma(roc4, s4)
+    sma1 + 2 * sma2 + 3 * sma3 + 4 * sma4
+
+// ***** HEIKIN ASHI CALCULATIONS *****
+ha_close = (open + high + low + close) / 4
+ha_open  = nz(ha_close[1], close)
+
+// For counting HA colors:
+ha_is_green = ha_close > ha_open ? 1 : 0
+ha_is_red   = ha_close < ha_open ? 1 : 0
+
+// ***** FEATURE CALCULATIONS BASED ON THE PYTHON CODE *****
+
+// 1. kst_SMA_20: SMA( f_kst(), 20 )
+kst_val      = f_kst()
+kst_SMA_20   = ta.sma(kst_val, 20)
+
+// 2. Doji_Count_5_SMA_30:
+// A doji is defined when abs(close - open) <= 0.00375 * open.
+doji = math.abs(close - open) <= 0.00375 * open ? 1 : 0
+doji_count_5 = f_sum(doji, 5)
+Doji_Count_5_SMA_30 = ta.sma(doji_count_5, 30)
+
+// 3. PctDiff_Avg_HL_8_50_Res_SMA_30_8Ago_WMA_23:
+//    a. Compute Avg_HH_8_50 and Avg_LL_8_50.
+avg_hh_8_50 = f_avg_high(high, 8, 50)
+avg_ll_8_50 = f_avg_low(low, 8, 50)
+//    b. Resistance value: Avg_HL_8_50_Res = 2×Avg_HH_8_50 - Avg_LL_8_50.
+Avg_HL_8_50_Res = 2 * avg_hh_8_50 - avg_ll_8_50
+//    c. Percent difference between current and 8 bars ago.
+PctDiff_res_8Ago = (Avg_HL_8_50_Res - Avg_HL_8_50_Res[8]) / Avg_HL_8_50_Res[8] * 100
+//    d. Smooth with SMA (30) then WMA (23).
+sma30_pctDiff_res = ta.sma(PctDiff_res_8Ago, 30)
+PctDiff_Avg_HL_8_50_Res_final = ta.wma(sma30_pctDiff_res, 23)
+
+// 4. HA_Red_Green_CrossDn_29_Count_6:
+// Count over 29 bars the number of times the green HA count falls below the red HA count.
+greenHA_29 = f_sum(ha_is_green, 29)
+redHA_29   = f_sum(ha_is_red, 29)
+// Identify a cross down: current green count < red count and previous bar's green count >= previous red count.
+ha_cross_dn = (greenHA_29 < redHA_29 and greenHA_29[1] >= redHA_29[1]) ? 1 : 0
+HA_Red_Green_CrossDn_29_Count_6 = f_sum(ha_cross_dn, 6)
+
+// 5. PctDiff_Low_Avg_HL_12_29_Sup_EMA_30_WMA_5:
+// For count = 12 over interval = 29: compute Avg_HH and Avg_LL.
+avg_hh_12_29 = f_avg_high(high, 12, 29)
+avg_ll_12_29 = f_avg_low(low, 12, 29)
+// Support level: Avg_HL_12_29_Sup = 2×Avg_LL_12_29 - Avg_HH_12_29.
+Avg_HL_12_29_Sup = 2 * avg_ll_12_29 - avg_hh_12_29
+// Percent difference between Low and support.
+PctDiff_low_sup = (low - Avg_HL_12_29_Sup) / Avg_HL_12_29_Sup * 100
+ema30_pctDiff_low_sup = ta.ema(PctDiff_low_sup, 30)
+PctDiff_Low_Avg_HL_12_29_Sup_final = ta.wma(ema30_pctDiff_low_sup, 5)
+
+// 6. PctDiff_High_Avg_HH_8_29_WMA_19:
+// For count = 8 over interval = 29: compute Avg_HH.
+avg_hh_8_29 = f_avg_high(high, 8, 29)
+PctDiff_high_avg = (high - avg_hh_8_29) / avg_hh_8_29 * 100
+PctDiff_High_Avg_HH_8_29_final = ta.wma(PctDiff_high_avg, 19)
+
+// 7. vpt_8: Volume Price Trend (cumulative)
+var float vpt = 0.0
+vpt := nz(vpt[1]) + (close[1] != 0 ? volume * (close - close[1]) / close[1] : 0)
+
+// 8. #_Green_HA_20_SMA_30:
+// Count of green HA candles over 20 bars smoothed with a 30‑period SMA.
+greenHA_20 = f_sum(ha_is_green, 20)
+Green_HA_20_SMA_30 = ta.sma(greenHA_20, 30)
+
+// 9. Engulfing_Bullish_TV_Count_11_EMA_9:
+// Define the Engulfing_Bullish_TV condition per the TradingView version.
+candle_len      = math.abs(close - open)
+prev_candle_len = math.abs(close[1] - open[1])
+emaCandleLen14  = ta.ema(candle_len, 14)
+engulfing_bullish_tv = (close < ta.sma(close, 50)) and 
+                       (close > open) and 
+                       (candle_len > emaCandleLen14) and 
+                       (open[1] > close[1]) and 
+                       (prev_candle_len < emaCandleLen14) and 
+                       (close >= open[1]) and 
+                       (open <= close[1]) and 
+                       ((close > open[1]) or (open < close[1]))
+Engulfing_Bullish_TV_Count_11 = f_sum(engulfing_bullish_tv ? 1 : 0, 11)
+Engulfing_Bullish_TV_EMA_9  = ta.ema(Engulfing_Bullish_TV_Count_11, 9)
+
+// ***** DECISION TREE CONDITIONS *****
+cond1 = kst_SMA_20 <= 1.40
+cond2 = Doji_Count_5_SMA_30 <= 4.03
+cond3 = PctDiff_Avg_HL_8_50_Res_final <= 2.69
+cond4 = PctDiff_Low_Avg_HL_12_29_Sup_final <= 35.99
+cond5 = PctDiff_High_Avg_HH_8_29_final <= -2.00
+cond6 = Green_HA_20_SMA_30 <= 8.00             
+cond7 = Engulfing_Bullish_TV_EMA_9 <= 5.00
+
+buySignal = cond1 and cond2 and cond3 and cond4 and cond5 and cond6 and cond7
+
+// ***** PLOTTING THE SIGNAL *****
+plotshape(buySignal, title="Buy Signal", style=shape.labelup, location=location.belowbar, color=color.green, text="BUY", size=size.tiny)
+alertcondition(buySignal, title="Buy Signal", message="Decision Tree BUY signal triggered.")

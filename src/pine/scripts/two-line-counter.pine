@@ -1,0 +1,31 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © stonkmogger
+
+//@version=6
+indicator("Two Line Counter", overlay=false)
+
+// Function to calculate the average of previous open and close
+avgPrevOC(srcOpen, srcClose) =>
+    (srcOpen + srcClose) / 2
+
+// Function to calculate the quarter value of current OHLC
+quarterOHLC(srcOpen, srcHigh, srcLow, srcClose) =>
+    (srcOpen + srcHigh + srcLow + srcClose) * 0.25
+
+// Initialize counts for Line 1 and Line 2
+line1 = 0
+line2 = 0
+
+// Loop through the last 8 candles to calculate conditions
+for i = 1 to 21
+    avgPrev = avgPrevOC(open[i], close[i])
+    quarterVal = quarterOHLC(open[i - 1], high[i - 1], low[i - 1], close[i - 1])
+
+    if avgPrev < quarterVal
+        line1 += 1
+    else if avgPrev > quarterVal
+        line2 += 1
+
+// Plot the results
+plot(line1, color=color.blue, title="Line 1")
+plot(line2, color=color.red, title="Line 2")

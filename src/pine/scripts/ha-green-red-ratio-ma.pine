@@ -1,0 +1,49 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © stonkmogger
+
+//@version=6
+indicator("Heikin Ashi Candle Ratio Moving Averages", overlay=false)
+
+// Function to calculate Heikin Ashi values
+haClose(open, high, low, close) =>
+    (open + high + low + close) / 4
+
+haOpen(prevOpen, prevClose) =>
+    (prevOpen + prevClose) / 2
+
+haHigh(high, haOpen, haClose) =>
+    math.max(high, haOpen, haClose)
+
+haLow(low, haOpen, haClose) =>
+    math.min(low, haOpen, haClose)
+
+// Calculate the Heikin Ashi values for each bar
+var float ha_open = na
+ha_close = haClose(open, high, low, close)
+ha_open := na(ha_open[1]) ? (open + close) / 2 : haOpen(ha_open[1], ha_close[1])
+ha_high = haHigh(high, ha_open, ha_close)
+ha_low = haLow(low, ha_open, ha_close)
+
+// Determine if a candle is green or red
+isGreen = ha_close > ha_open
+isRed = ha_close <= ha_open
+
+// Count green and red candles in the last 8 intervals
+greenCount = 0
+redCount = 0
+for i = 0 to 7
+    greenCount += isGreen[i] ? 1 : 0
+    redCount += isRed[i] ? 1 : 0
+
+// Calculate the ratio of green to red candles
+ratio = redCount == 0 ? greenCount : greenCount / redCount
+
+// Calculate moving averages of the ratio
+ma10 = ta.sma(ratio, 10)
+ma50 = ta.sma(ratio, 50)
+ma200 = ta.sma(ratio, 200)
+
+// Plot the moving averages
+plot(ma10, color=color.green, title="10-Period MA of Green:Red Ratio")
+plot(ma50, color=color.red, title="50-Period MA of Green:Red Ratio")
+plot(ma200, color=color.rgb(82, 102, 255), title="200-Period MA of Green:Red Ratio")

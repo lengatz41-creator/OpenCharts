@@ -1,0 +1,19 @@
+//////////////////////////////////////////////////////////////
+//Strategy inspired reddit user u/dvdrummer360
+//Buy when RSI dips below 30 and RSISMA is over 50 (Green)
+//////////////////////////////////////////////////////////////
+// COMPATIBILITY EDIT (OpenCharts/PineTS): the original has no //@version
+// directive (Pine v1/v2 syntax) which PineTS cannot parse. Converted to
+// Pine v5 with identical calculations: SMA(100) of RSI(14), *not* SMA of
+// close; `transp=70` became `color.new(c, 70)`; `style=area` became
+// `plot.style_area`; hline colours/styles use their v5 names.
+//@version=5
+indicator(title="RSI-14 + SMA100 RSI-14")
+RSISMA = (ta.sma(ta.rsi(close,14), 100))
+
+hline(70, color=color.red, linestyle=hline.style_dashed)
+hline(50, color=color.black, linestyle=hline.style_solid)
+hline(30, color=color.green, linestyle=hline.style_dashed)
+
+plot(ta.rsi(close, 14), color=color.blue, title="RSI")
+plot(RSISMA, color=RSISMA > 50 ? color.new(color.green, 70) : color.new(color.red, 70), style=plot.style_area, title="RSISMA")

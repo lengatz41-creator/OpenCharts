@@ -1,0 +1,223 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BackQuant
+
+//@version=5
+indicator(
+ "Dip Hunter [BackQuant]", 
+ overlay=true, 
+ max_labels_count=500
+ )
+
+// Groups
+const string diphunter = "Dip Hunter Settings" 
+const string trend = "Trend Filter"
+const string strength = "Heat / Meter"
+const string entires = "Entries"
+const string ui = "UI Settings"
+
+// ── Define User Inputs ─────────────────────────────────────────────────────
+int   volLookback          = input.int(65,  "Vol Lookback", minval=1, group=diphunter, inline="vol",tooltip="Bars used to average volume for spike detection.")
+float volMultiplier        = input.float(2.0,"Vol Spike", minval=0.1,step=0.1, group=diphunter, inline="vol",tooltip="Current volume must be this multiple of the avg to count as a spike.")
+
+int   emaFast              = input.int(20,  "Fast EMA", minval=1, group=diphunter, inline="ema",tooltip="Short-term EMA for structure check.")
+int   emaSlow              = input.int(50,  "Slow EMA", minval=1, group=diphunter, inline="ema",tooltip="Long-term EMA for structure check (fast < slow = bearish).")
+
+int   smoothingPeriod      = input.int(5, "Price Smooth",  minval=1, group=diphunter, inline="smooth",tooltip="Optional smoothing length for price-derived series.")
+
+int   volPeriod            = input.int(14,  "Volatility Len", minval=1, group=diphunter, inline="volty",tooltip="Length for ATR / StDev volatility calculations.")
+float volSpikeMultiplier   = input.float(1.5, "Vol Spike", minval=0.1, step=0.1, group=diphunter, inline="volty",tooltip="StdDev/ATR must exceed this multiple of its average to flag volatility.")
+
+float dipThreshold         = input.float(2.0,"Dip %", minval=0.1, step=0.1, group=diphunter, inline="dip",tooltip="% drop from recent high required to qualify as a dip.")
+int   lookbackBars         = input.int(5,   "Lookback Bars", minval=1, group=diphunter, inline="dip",tooltip="Bars back to search for the recent high used in dip % calc.")
+// Trend Filter Settings
+bool     useTrendFilter    = input.bool(false, "Enable Trend Filter", group=trend)
+int      trendEMA          = input.int(100, "Trend EMA Period", group=trend)
+float    trendStrength     = input.float(0.001, "Minimum Trend Strength",  group=trend)
+// Extras
+bool  showEntryLines       = input.bool(true,  "Show Entry Lines", group=entires)
+int   entryLenBars         = input.int(100, "Line Length (bars)", 1, 200, group=entires, inline="len")
+int   minGapBars           = input.int(5, "Min Gap (bars)",     1, 200, group=entires, inline="len",tooltip="No new line if a dip signal occurred within this many bars.")
+string entrySrcOpt         = input.string("Low", "Entry Price", options=["Low","Close","Dip % Level"], group=entires,tooltip="Price level to draw the line at.")
+
+
+bool  paintBarsScore       = input.bool(true, "Color Bars by Score", group=strength)
+bool  showMeter            = input.bool(true, "Show Meter Table", group=strength)
+int   meterCells           = input.int(60, "Meter Cells", 20, 120, group=strength)
+string meterPos            = input.string("bottom_center", "Meter Position",options = ["top_left","top_center","top_right","bottom_left","bottom_center","bottom_right"],group=strength)
+
+// UI Settings         
+bool     showSignals       = input.bool(true, "Show Dip Signals", group=ui)
+bool     showEMAs          = input.bool(false, "Show EMAs", group=ui)
+color    bullColor         = input.color(#00ff00, "Bullish Color", group=ui, inline="colors")
+color    bearColor         = input.color(#ff0000, "Bearish Color", group=ui, inline="colors")
+color    neutralColor      = input.color(#808080, "Neutral Color", group=ui, inline="colors")
+
+/////////////////////////////////////////////////////////////// © BackQuant ///////////////////////////////////////////////////////////////
+// Helper Functions
+rescale(_src, _oldMin, _oldMax, _newMin, _newMax) =>
+    _newMin + (_newMax - _newMin) * (_src - _oldMin) / math.max(_oldMax - _oldMin, 1e-9)
+
+clamp(x, lo, hi) => x < lo ? lo : x > hi ? hi : x
+
+gradColor(v) =>
+    _v = clamp(v, -50, 50)
+    n  = (_v + 50.0) / 100.0
+    n < 0.5
+         ? color.from_gradient(n, 0.0, 0.5, #ff0000, color.white)   
+         : color.from_gradient(n, 0.5, 1.0, color.white, #00ff00)   
+
+// Calculation Begin 
+// Price Analysis 
+ema_fast = ta.ema(close, emaFast)
+ema_slow = ta.ema(close, emaSlow)
+
+trend_ema = ta.ema(close, trendEMA)
+trend_direction = trend_ema - trend_ema[10]
+in_uptrend = close > trend_ema and trend_direction > trend_direction * trendStrength
+
+// Volume Analysis
+avg_volume = ta.sma(volume, volLookback)
+volume_ratio = volume / avg_volume
+volume_spike = volume_ratio > volMultiplier
+
+// Volume momentum
+vol_momentum = ta.roc(volume, 5)
+strong_vol_spike = volume_spike and vol_momentum > 50
+
+// Volatility Analysis 
+// Standard Deviation Method
+price_stddev = ta.stdev(close, volPeriod)
+avg_stddev = ta.sma(price_stddev, volPeriod)
+volatility_spike = price_stddev > avg_stddev * volSpikeMultiplier
+
+// ATR Method
+tr = ta.tr(true)
+atr = ta.atr(volPeriod)
+range_spike = tr > atr * volSpikeMultiplier
+
+// Combined volatility
+volatility_confirmed = volatility_spike or range_spike
+
+
+// Dip Hunter Logic
+recent_high = ta.highest(high, lookbackBars)
+dip_percent = ((recent_high - close) / recent_high) * 100
+is_dip = dip_percent > dipThreshold
+
+// Price structure
+price_below_fast = close < ema_fast
+price_below_slow = close < ema_slow
+bearish_structure = ema_fast < ema_slow
+
+// Signals 
+// Base dip conditions
+dip_conditions = is_dip and volume_spike and volatility_confirmed and price_below_fast and bearish_structure
+
+// Apply trend filter if enabled
+dip_hunter_signal = useTrendFilter ? (dip_conditions and in_uptrend) : dip_conditions
+
+// Signal strength scoring
+signal_score = 0
+signal_score := is_dip ? signal_score + 1 : signal_score
+signal_score := volume_spike ? signal_score + 1 : signal_score
+signal_score := strong_vol_spike ? signal_score + 1 : signal_score
+signal_score := volatility_confirmed ? signal_score + 1 : signal_score
+signal_score := in_uptrend ? signal_score + 2 : signal_score
+
+// PLotting
+ema_fast_color = ema_fast > ema_slow ? #00ff00 : #ff0000
+ema_slow_color = ema_fast > ema_slow ? #00ff00 : #ff0000
+
+plot(showEMAs ? ema_fast : na, "Fast EMA", ema_fast_color, 1, force_overlay = true)
+plot(showEMAs ? ema_slow : na, "Slow EMA", ema_slow_color, 2, force_overlay = true)
+
+// Trend EMA (if trend filter enabled)
+plot(useTrendFilter and showEMAs ? trend_ema : na, "Trend EMA", 
+     in_uptrend ? color.new(bullColor, 30) : color.new(bearColor, 30), 2, plot.style_line)
+
+// Standard signals
+plotshape(showSignals and dip_hunter_signal, 
+         "Dip Signal", shape.triangleup, location.belowbar, 
+         color.new(bullColor, 0), size=size.normal, force_overlay=true)
+
+bgcolor(showSignals and dip_hunter_signal? color.new(bullColor, 85):na)
+
+
+b_dip   = is_dip
+b_vol   = volume_spike
+b_volty = volatility_confirmed
+b_fast  = price_below_fast
+b_struc = bearish_structure
+b_trend = (not useTrendFilter) or in_uptrend
+// Score 0→1
+total_parts = 5 + (useTrendFilter ? 1 : 0)
+score = (
+     (b_dip   ? 1 : 0) +
+     (b_vol   ? 1 : 0) +
+     (b_volty ? 1 : 0) +
+     (b_fast  ? 1 : 0) +
+     (b_struc ? 1 : 0) +
+     (useTrendFilter ? (b_trend ? 1 : 0) : 1)
+   ) / total_parts
+
+scoreScaled = (score * 2.0 - 1.0) * 50.0
+
+// Bar coloring
+barcolor(paintBarsScore ? gradColor(scoreScaled) : na)
+
+var table meter = na
+if showMeter and na(meter)
+    meter := table.new(meterPos, meterCells + 2, 2, bgcolor=color.new(color.black, 85))
+
+if showMeter and barstate.islast
+    // gradient strip
+    for i = 0 to meterCells - 1
+        cellVal = rescale(i, 0, meterCells - 1, -50, 50)
+        meter.cell(i + 1, 0, "", bgcolor=gradColor(cellVal))
+    // endpoints
+    meter.cell(0, 0, "Overheated", bgcolor=gradColor(-50), text_color=color.white)
+    meter.cell(meterCells + 1, 0, "Dip", bgcolor=gradColor( 50), text_color=color.white)
+    // pointer
+    p = math.round(rescale(scoreScaled, -50, 50, 0, meterCells - 1))
+    meter.cell(p + 1, 0, "▲", text_color=color.black, bgcolor=gradColor(scoreScaled))
+
+
+
+var line[] entry_lines = array.new_line()
+var int[]  entry_start = array.new_int()
+
+// Price to use
+entryPrice =
+     entrySrcOpt == "Low"         ? low :
+     entrySrcOpt == "Close"       ? close :
+     // Dip % level (recent_high*(1-dipThreshold/100))
+     recent_high * (1 - dipThreshold/100.0)
+
+// Fire once if no signal in last `minGapBars`
+newEntry = showEntryLines and dip_hunter_signal and ta.barssince(dip_hunter_signal[1]) > minGapBars
+
+if newEntry
+    l = line.new(bar_index, entryPrice, bar_index + entryLenBars, entryPrice,
+                 extend=extend.none, color=color.new(bullColor, 0), width=2)
+    array.push(entry_lines, l)
+    array.push(entry_start, bar_index)
+
+
+// Alert Conditions
+first_dip        = dip_hunter_signal and not dip_hunter_signal[1]
+market_overheated= scoreScaled <= -40
+close_to_dip     = not dip_hunter_signal and score >= 0.6          
+dip_confirmed    = first_dip                                       
+dip_active       = dip_hunter_signal
+dip_fading       = ta.crossunder(score, 0.5)                        
+trend_blocked    = dip_conditions and useTrendFilter and not in_uptrend
+
+alertcondition(market_overheated, "Market Overheated",      "Market overheated {{ticker}}")
+alertcondition(close_to_dip,      "Close To A Dip",         "Close to a dip {{ticker}}")
+alertcondition(dip_confirmed,     "Dip Confirmed",          "Dip confirmed {{ticker}}")
+alertcondition(dip_active,        "Dip Active",             "Dip active {{ticker}}")
+alertcondition(dip_fading,        "Dip Fading",             "Dip strength fading {{ticker}}")
+alertcondition(trend_blocked,     "Trend Blocked Signal",   "Signal blocked by trend filter {{ticker}}")
+
+
+

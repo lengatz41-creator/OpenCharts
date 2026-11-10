@@ -35,9 +35,12 @@ import {
   Triangle,
   Type,
   X,
+  Settings2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { INDICATOR_REGISTRY, type IndicatorType } from "../../lib/indicators.ts";
+import { openPineSettings } from "../../pine/params-store.ts";
+import { PINE_SCRIPTS } from "../../pine/registry.ts";
 import { cn, formatNumber } from "../../lib/utils.ts";
 import {
   type DrawingLine,
@@ -342,7 +345,7 @@ export function ChartToolbar({
           </button>
 
           {showIndicatorMenu && (
-            <div className="absolute top-full left-0 z-50 mt-1 w-64 bg-card border border-border rounded-lg shadow-xl p-2 space-y-0.5">
+            <div className="absolute top-full left-0 z-50 mt-1 w-80 bg-card border border-border rounded-lg shadow-xl p-2 space-y-0.5 max-h-[70vh] overflow-y-auto">
               {INDICATOR_REGISTRY.map((ind) => (
                 <button
                   key={ind.type}
@@ -359,6 +362,37 @@ export function ChartToolbar({
                   <span className="flex-1">{ind.label}</span>
                   <span className="text-[10px] text-muted-foreground">{ind.pane}</span>
                 </button>
+              ))}
+              {/* Pine scripts: each is an independent toggle with its own settings */}
+              <div className="pt-1.5 mt-1 border-t border-border px-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                Pine scripts
+              </div>
+              {PINE_SCRIPTS.map((s) => (
+                <div
+                  key={s.id}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-2 py-1.5 rounded text-sm hover:bg-secondary",
+                    activeIndicators.includes(s.id) && "bg-secondary",
+                  )}
+                >
+                  <button onClick={() => onToggleIndicator(s.id)} className="flex flex-1 min-w-0 items-center gap-2 text-left" title={s.label}>
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: s.color }} />
+                    <span className="flex-1 truncate">{s.shortLabel}</span>
+                    {s.status === "requires compatibility edit" && (
+                      <span className="text-[9px] rounded border border-[#f0b90b]/50 px-1 text-[#f0b90b]" title={s.compatNotes}>
+                        v5 edit
+                      </span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground">{s.kind === "strategy" ? "strategy" : s.pane}</span>
+                  </button>
+                  <button
+                    onClick={() => openPineSettings(s.id)}
+                    className="text-muted-foreground hover:text-foreground"
+                    title="Script settings"
+                  >
+                    <Settings2 className="h-3 w-3" />
+                  </button>
+                </div>
               ))}
             </div>
           )}

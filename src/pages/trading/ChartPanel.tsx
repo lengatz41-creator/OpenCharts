@@ -24,6 +24,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useChartPreferences } from "../../hooks/useChartPreferences.ts";
 import { BandsIndicator } from "../../lib/chart-plugins/bands-indicator/bands-indicator.ts";
@@ -42,7 +43,21 @@ import { cn } from "../../lib/utils.ts";
 import { api } from "../../services/api.ts";
 import { queryKeys } from "../../services/queries.ts";
 import type { Candle, Order, Position, Symbol } from "../../services/schemas.ts";
+import {
+  getSymbolMarkers,
+  getSymbolMarkersVersion,
+  type SymbolMarker,
+  subscribeSymbolMarkers,
+} from "../../services/symbol-markers.ts";
 import { toast } from "../../services/toast.ts";
+import { getPineDisplay, getPineStoreVersion, subscribePineStore } from "../../pine/params-store.ts";
+import { buildCsvEventMarker, buildPineMarkers, composeChartMarkers } from "./chartMarkers.ts";
+import { PineLegend, PineStrategyLedgers, PineTableOverlay } from "./PineChartOverlays.tsx";
+import { PinePanes } from "./PinePanes.tsx";
+import { PineSettingsDialog } from "./PineSettingsDialog.tsx";
+import { useCsvEvents } from "./useCsvEvents.ts";
+import { usePineOverlays } from "./usePineOverlays.ts";
+import { usePineScripts } from "./usePineScripts.ts";
 import {
   CHART_COLORS,
   type DrawingLine,
@@ -863,6 +878,29 @@ function buildReplayMarker(ev: ReplayTradeEvent, timeframe: Timeframe): SeriesMa
   };
 }
 
+function buildSymbolMarker(m: SymbolMarker, timeframe: Timeframe): SeriesMarker<Time> {
+  const time = getCandleBucketTime(m.time * 1000, timeframe) as Time;
+  const signColor = m.text.includes("+") ? "#0ecb81" : m.text.includes("-") ? "#f6465d" : "#9e9e9e";
+  switch (m.kind) {
+    case "buy":
+      return { time, position: "belowBar", color: "#2196F3", shape: "arrowUp", text: m.text };
+    case "partial":
+      return { time, position: "aboveBar", color: "#0ecb81", shape: "arrowDown", text: m.text };
+    case "sim_partial":
+      return { time, position: "aboveBar", color: "#9e9e9e", shape: "arrowDown", text: m.text };
+    case "sim_exit":
+      return { time, position: "aboveBar", color: "#9e9e9e", shape: "circle", text: m.text };
+    case "candidate":
+      return { time, position: "aboveBar", color: "#ff9800", shape: "arrowDown", text: m.text };
+    case "real":
+      return m.text.includes("BUY")
+        ? { time, position: "belowBar", color: "#f0b90b", shape: "arrowUp", text: m.text }
+        : { time, position: "aboveBar", color: "#f0b90b", shape: "arrowDown", text: m.text };
+    default:
+      return { time, position: "aboveBar", color: signColor, shape: "circle", text: m.text };
+  }
+}
+
 // ── HUD presentational sub-components ────────────────────────────────────────
 // Extracted so the legend's per-value colour ternaries live here instead of
 // inflating the ChartPanel render function's cognitive complexity.
@@ -1419,26 +1457,15 @@ export function ChartPanel({
 
   useIndicators(chartRef, candleSeriesRef, chartData, activeIndicators, isDark);
 
-  // ── Replay trade event markers ─────────────────────────────
-  useEffect(() => {
-    const series = candleSeriesRef.current;
-    if (!series) return;
-    if (!replayTradeEvents || replayTradeEvents.length === 0) {
-      series.setMarkers([]);
-      return;
-    }
-    const markers: SeriesMarker<Time>[] = [];
-    for (const ev of replayTradeEvents) {
-      const marker = buildReplayMarker(ev, timeframe);
-      if (marker) markers.push(marker);
-    }
-    // lightweight-charts requires markers sorted by time ascending
-    markers.sort((a, b) => (a.time as number) - (b.time as number));
-    series.setMarkers(markers);
-    return () => {
-      series.setMarkers([]);
-    };
-  }, [replayTradeEvents, timeframe]);
+  // ── Pine scripts: evaluated off-thread, rendered by the overlay hook and the
+  // lower panes below; signals and fills go through the marker composer.
+  const pineStates = usePineScripts(chartData, volumeData, selectedSymbol, timeframe, activeIndicators);
+  const pinePanes = useMemo(
+    () => Object.values(pineStates).filter((s) => s.spec.pane === "below"),
+    [pineStates],
+  );
+  const csvEvents = useCsvEvents(selectedSymbol);
+  const pineStoreVersion = useSyncExternalStore(subscribePineStore, getPineStoreVersion, getPineStoreVersion);
 
   // ── Candle close countdown timer ───────────────────────────
   // Daily and weekly bars get no countdown; that is decided when rendering the
@@ -1853,6 +1880,42 @@ export function ChartPanel({
     return scheduleStaleRefetch(chartData, ctx);
   }, [chartData, volumeData, selectedSymbol, timeframe, makeRtCtx]);
 
+  // ── Chart markers: replay trade events + adapter-supplied symbol markers ──
+  // Runs after the data effect above so markers land on the current series.
+  const symbolMarkersVersion = useSyncExternalStore(
+    subscribeSymbolMarkers,
+    getSymbolMarkersVersion,
+    getSymbolMarkersVersion,
+  );
+  // Every marker source is merged here (see chartMarkers.ts); this is the only
+  // `setMarkers()` call on the candle series.
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    const replay: SeriesMarker<Time>[] = [];
+    for (const ev of replayTradeEvents ?? []) {
+      const marker = buildReplayMarker(ev, timeframe);
+      if (marker) replay.push(marker);
+    }
+    const symbol = getSymbolMarkers(selectedSymbol).map((m) => buildSymbolMarker(m, timeframe));
+    const csv = csvEvents.map((ev) => buildCsvEventMarker(ev, timeframe));
+    const pine = buildPineMarkers(pineStates, getPineDisplay, pipDigits);
+    const markers = composeChartMarkers(replay, symbol, csv, pine);
+    series.setMarkers(markers);
+    return () => {
+      try {
+        series.setMarkers([]);
+      } catch {
+        /* series already removed with its chart */
+      }
+    };
+    // pineStoreVersion re-applies the fill-marker toggle.
+  }, [replayTradeEvents, timeframe, selectedSymbol, chartData, symbolMarkersVersion, csvEvents, pineStates, pipDigits, pineStoreVersion]);
+
+  // Overlay scripts draw onto the candle chart after the data effect above has
+  // (re)set the candles, so painted bars and lines land on the current series.
+  usePineOverlays(chartRef, candleSeriesRef, chartEpoch, chartData, pineStates);
+
   // ── Real-time candle updates ──────────────────────────
 
   // Primary: server-aggregated CandleUpdate events (OHLCV from candle aggregator).
@@ -2108,8 +2171,26 @@ export function ChartPanel({
         hasAccount={!!accountId}
       />
 
-      {/* Chart container — cursor is managed imperatively by DrawingToolsManager */}
-      <div ref={containerRef} className="w-full h-full" onContextMenu={handleChartContextMenu} />
+      {/* Chart container — cursor is managed imperatively by DrawingToolsManager.
+          Lower Pine panes stack underneath it inside the same column. */}
+      <div className="flex h-full w-full flex-col">
+        <div className="relative min-h-0 flex-1">
+          <div ref={containerRef} className="w-full h-full" onContextMenu={handleChartContextMenu} />
+          <PineTableOverlay states={pineStates} />
+          <PineStrategyLedgers states={pineStates} digits={pipDigits} />
+        </div>
+        <PinePanes
+          mainChartRef={chartRef}
+          mainSeriesRef={candleSeriesRef}
+          chartEpoch={chartEpoch}
+          chartData={chartData}
+          panes={pinePanes}
+          colors={colors}
+          timeframe={timeframe}
+        />
+      </div>
+      <PineLegend states={pineStates} />
+      <PineSettingsDialog symbol={selectedSymbol} states={pineStates} />
 
       {/* Left vertical tool rail (TradingView-style grouped flyouts) */}
       <DrawingToolRail drawingTool={drawingTool} onDrawingTool={(t) => onDrawingToolSelect?.(t)} />

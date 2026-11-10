@@ -1,0 +1,235 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © BackQuant
+
+//@version=6
+indicator(
+ title="Top Finder & Dip Hunter [BackQuant]",
+ overlay=true,
+ max_labels_count=500
+ )
+
+// INPUTS
+string grpDip = "Dip Detection"
+string grpTop = "Top Detection"
+string grpFilter = "Quality Filters"
+string grpVis = "Visual"
+
+string dipMethod = input.string("Hybrid", "Dip Method", ["Dynamic", "Fibonacci", "Volatility", "Volume Weighted", "Hybrid"], group=grpDip, inline="dip1", tooltip="Algorithm used to derive dip support. Dynamic uses recent lows plus volatility, Fibonacci uses 0.618/0.786, Volatility uses bands, Volume Weighted is VWAP based, Hybrid blends them.")
+int dipLookback = input.int(50, "Dip Lookback", group=grpDip, inline="dip1", tooltip="Bars to scan when building the dip support window and related stats.")
+float dipSensitivity = input.float(1.0, "Dip Sensitivity", step=0.1, group=grpDip, inline="dip2", tooltip="Scales volatility buffers. Higher values widen the safety margin and reduce false dips.")
+float minDipDepth = input.float(2.0, "Min Dip Depth %", step=0.5, group=grpDip, inline="dip2", tooltip="Minimum percentage penetration below the support line required to qualify a dip.")
+
+string topMethod = input.string("Hybrid", "Top Method", ["Dynamic", "Fibonacci", "Volatility", "Volume Weighted", "Hybrid"], group=grpTop, inline="top1", tooltip="Algorithm used to derive top resistance. Dynamic uses recent highs minus volatility, Fibonacci uses 0.618/0.786, Volatility uses bands, Volume Weighted is VWAP based, Hybrid blends them.")
+int topLookback = input.int(50, "Top Lookback", group=grpTop, inline="top1", tooltip="Bars to scan when building the top resistance window and related stats.")
+float topSensitivity = input.float(1.0, "Top Sensitivity", step=0.1, group=grpTop, inline="top2", tooltip="Scales volatility buffers. Higher values widen the margin and reduce premature top signals.")
+float minTopRise = input.float(2.0, "Min Top Rise %", step=0.5, group=grpTop, inline="top2", tooltip="Minimum percentage extension above the resistance line required to qualify a top.")
+
+bool useTrendFilter = input.bool(true, "Trend Filter", group=grpFilter, inline="flt", tooltip="Requires alignment with a blended trend model using EMAs and RSI to validate signals.")
+bool useVolumeFilter = input.bool(true, "Volume Filter", group=grpFilter, inline="flt", tooltip="Requires volume expansion versus its moving average or a spike to validate signals.")
+bool useMomentumFilter = input.bool(true, "Momentum Filter", group=grpFilter, inline="flt", tooltip="Requires a short-term momentum shift in the expected direction to confirm reversals.")
+float minQualityScore = input.float(60, "Min Quality Score", minval=0, maxval=100, group=grpFilter, tooltip="Threshold for the 0-100 composite quality score. Signals below this value are ignored.")
+
+color dipColor = input.color(#00ff00, "Dip Color", group=grpVis, inline="vis1", tooltip="Color used for dip support, labels, and highlights.")
+color topColor = input.color(#ff0000, "Top Color", group=grpVis, inline="vis1", tooltip="Color used for top resistance, labels, and highlights.")
+bool showScores = input.bool(true, "Show Quality Scores", group=grpVis, inline="vis2", tooltip="Display the computed composite quality score when a new signal is generated.")
+
+// VOLATILITY & VOLUME ANALYSIS
+float atr = ta.atr(14)
+float atrMult = atr * dipSensitivity
+
+float volMA = ta.sma(volume, 20)
+float volStdev = ta.stdev(volume, 20)
+bool volSpike = volume > volMA + volStdev
+
+// DIP SUPPORT LEVEL CALCULATION
+// Method 1: Dynamic Support (recent lows + volatility buffer)
+float dynamicDipSupport = ta.lowest(low, dipLookback) + (atrMult * 0.5)
+
+// Method 2: Fibonacci Support (0.618 and 0.786 retracement)
+float dipHigh = ta.highest(high, dipLookback)
+float dipLow = ta.lowest(low, dipLookback)
+float dipRange = dipHigh - dipLow
+float fib618Dip = dipHigh - (dipRange * 0.618)
+float fib786Dip = dipHigh - (dipRange * 0.786)
+float fibDipSupport = close > fib618Dip ? fib618Dip : fib786Dip
+
+// Method 3: Volatility Support (Bollinger lower band)
+float dipBasis = ta.sma(close, 20)
+float dipDev = ta.stdev(close, 20) * 2
+float volDipSupport = dipBasis - dipDev
+
+// Method 4: Volume Weighted Support (VWAP-based)
+float dipVWAP = ta.vwap(close)
+float vwapDev = ta.stdev(close - dipVWAP, dipLookback)
+float vwapDipSupport = dipVWAP - (vwapDev * 1.5)
+
+// Method 5: Hybrid (weighted average of best methods)
+float hybridDipSupport = (dynamicDipSupport * 0.3 + fibDipSupport * 0.3 + volDipSupport * 0.2 + vwapDipSupport * 0.2)
+
+// Select method
+float dipSupportLine = switch dipMethod
+    "Dynamic" => dynamicDipSupport
+    "Fibonacci" => fibDipSupport
+    "Volatility" => volDipSupport
+    "Volume Weighted" => vwapDipSupport
+    => hybridDipSupport
+
+// Smooth the support line
+dipSupportLine := ta.ema(dipSupportLine, 3)
+
+// TOP RESISTANCE LEVEL CALCULATION
+// Method 1: Dynamic Resistance (recent highs - volatility buffer)
+float dynamicTopResistance = ta.highest(high, topLookback) - (atrMult * 0.5)
+
+// Method 2: Fibonacci Resistance (0.618 and 0.786 retracement)
+float topHigh = ta.highest(high, topLookback)
+float topLow = ta.lowest(low, topLookback)
+float topRange = topHigh - topLow
+float fib618Top = topLow + (topRange * 0.618)
+float fib786Top = topLow + (topRange * 0.786)
+float fibTopResistance = close < fib618Top ? fib618Top : fib786Top
+
+// Method 3: Volatility Resistance (Bollinger upper band)
+float topBasis = ta.sma(close, 20)
+float topDev = ta.stdev(close, 20) * 2
+float volTopResistance = topBasis + topDev
+
+// Method 4: Volume Weighted Resistance (VWAP-based)
+float topVWAP = ta.vwap(close)
+float vwapTopDev = ta.stdev(close - topVWAP, topLookback)
+float vwapTopResistance = topVWAP + (vwapTopDev * 1.5)
+
+// Method 5: Hybrid
+float hybridTopResistance = (dynamicTopResistance * 0.3 + fibTopResistance * 0.3 + volTopResistance * 0.2 + vwapTopResistance * 0.2)
+
+// Select method
+float topResistanceLine = switch topMethod
+    "Dynamic" => dynamicTopResistance
+    "Fibonacci" => fibTopResistance
+    "Volatility" => volTopResistance
+    "Volume Weighted" => vwapTopResistance
+    => hybridTopResistance
+
+// Smooth the resistance line
+topResistanceLine := ta.ema(topResistanceLine, 3)
+
+// TREND ANALYSIS
+float ema50 = ta.ema(close, 50)
+float ema200 = ta.ema(close, 200)
+
+float trendScore = 0.0
+trendScore += close > ema200 ? 25 : -25
+trendScore += close > ema50 ? 15 : -15
+trendScore += ema50 > ema200 ? 25 : -25
+trendScore += ta.rsi(close, 14) > 50 ? 15 : -15
+trendScore += ta.change(close, 10) > 0 ? 20 : -20
+
+// Normalize to 0-100
+float normalizedTrend = (trendScore + 100) / 2
+
+bool bullishTrend = normalizedTrend > 55
+bool bearishTrend = normalizedTrend < 45
+
+// DIP DETECTION & QUALITY SCORING
+bool dipTouch = low <= dipSupportLine or close <= dipSupportLine
+float dipPenetration = dipTouch ? ((dipSupportLine - low) / dipSupportLine) * 100 : 0
+bool validDipDepth = dipPenetration >= minDipDepth
+
+// Dip Quality Score (0-100)
+float dipQualityScore = 0.0
+
+// 1. Trend Alignment (0-25 points)
+if useTrendFilter
+    dipQualityScore += bullishTrend ? 25 : normalizedTrend > 40 ? 15 : 5
+else
+    dipQualityScore += 25
+
+// 2. Volume Confirmation (0-25 points)
+if useVolumeFilter
+    dipQualityScore += volSpike ? 25 : volume > volMA ? 15 : 5
+else
+    dipQualityScore += 25
+
+// 3. RSI Oversold (0-20 points)
+float rsi = ta.rsi(close, 14)
+dipQualityScore += rsi < 30 ? 20 : rsi < 40 ? 15 : rsi < 50 ? 10 : 5
+
+// 4. Momentum Reversal (0-15 points)
+if useMomentumFilter
+    float mom = ta.mom(close, 5)
+    float momChange = ta.change(mom, 2)
+    dipQualityScore += mom < 0 and momChange > 0 ? 15 : mom < 0 ? 10 : 5
+else
+    dipQualityScore += 15
+
+// 5. Price Action (0-15 points)
+bool bullishCandle = close > open
+bool hammer = bullishCandle and (close - low) > (high - close) * 2
+dipQualityScore += hammer ? 15 : bullishCandle ? 10 : 5
+
+// Final Dip Signal
+bool dipSignal = dipTouch and validDipDepth and dipQualityScore >= minQualityScore
+
+// TOP DETECTION & QUALITY SCORING
+bool topTouch = high >= topResistanceLine or close >= topResistanceLine
+float topPenetration = topTouch ? ((high - topResistanceLine) / topResistanceLine) * 100 : 0
+bool validTopRise = topPenetration >= minTopRise
+
+// Top Quality Score (0-100)
+float topQualityScore = 0.0
+
+// 1. Trend Alignment (0-25 points)
+if useTrendFilter
+    topQualityScore += bearishTrend ? 25 : normalizedTrend < 60 ? 15 : 5
+else
+    topQualityScore += 25
+
+// 2. Volume Confirmation (0-25 points)
+if useVolumeFilter
+    topQualityScore += volSpike ? 25 : volume > volMA ? 15 : 5
+else
+    topQualityScore += 25
+
+// 3. RSI Overbought (0-20 points)
+topQualityScore += rsi > 70 ? 20 : rsi > 60 ? 15 : rsi > 50 ? 10 : 5
+
+// 4. Momentum Reversal (0-15 points)
+if useMomentumFilter
+    float mom = ta.mom(close, 5)
+    float momChange = ta.change(mom, 2)
+    topQualityScore += mom > 0 and momChange < 0 ? 15 : mom > 0 ? 10 : 5
+else
+    topQualityScore += 15
+
+// 5. Price Action (0-15 points)
+bool bearishCandle = close < open
+bool shootingStar = bearishCandle and (high - close) > (close - low) * 2
+topQualityScore += shootingStar ? 15 : bearishCandle ? 10 : 5
+
+// Final Top Signal
+bool topSignal = topTouch and validTopRise and topQualityScore >= minQualityScore
+
+// PLOTS
+// Support and Resistance Lines
+plot(dipSupportLine, "Dip Support", color=dipColor, linewidth=2)
+plot(topResistanceLine, "Top Resistance", color=topColor, linewidth=2)
+
+// Signal Shapes
+plotshape(dipSignal and not dipSignal[1], "Dip Signal", shape.labelup, location.belowbar, dipColor, text="DIP", textcolor=color.white, size=size.normal)
+plotshape(topSignal and not topSignal[1], "Top Signal", shape.labeldown, location.abovebar, topColor, text="TOP", textcolor=color.white, size=size.normal)
+
+// Quality Score Labels
+if showScores
+    if dipSignal and not dipSignal[1]
+        label.new(bar_index, low - atr, "Q: " + str.tostring(math.round(dipQualityScore)) + "%", color=color.new(dipColor, 20), textcolor=color.white, style=label.style_label_up, size=size.small)
+    
+    if topSignal and not topSignal[1]
+        label.new(bar_index, high + atr, "Q: " + str.tostring(math.round(topQualityScore)) + "%", color=color.new(topColor, 20), textcolor=color.white, style=label.style_label_down, size=size.small)
+
+// Background highlighting
+bgcolor(dipTouch and validDipDepth ? color.new(dipColor, 95) : na)
+bgcolor(topTouch and validTopRise ? color.new(topColor, 95) : na)
+
+// Alerts 
+alertcondition(ta.crossover(close, dipSupportLine), "Dip Recovery", "Price recovered above dip support on {{exchange}}:{{ticker}}")
+alertcondition(ta.crossunder(close, topResistanceLine), "Top Breakdown", "Price broke down from top resistance on {{exchange}}:{{ticker}}")

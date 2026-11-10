@@ -1,0 +1,24 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © stonkmogger
+
+//@version=5
+indicator(title="price vs. whale MF", shorttitle="Price vs. whale MF", format=format.price, precision=2)
+adjustment = close==high and close==low or high==low ? 0 : ((2*close-low-high)/(high-low))*volume
+WhaleMoneyFlow = math.sum(adjustment, 10) / math.sum(volume, 10)
+whalesource = close
+upper = math.sum(volume * (ta.change(whalesource) <= 0 ? 0 : whalesource), 14)
+lower = math.sum(volume * (ta.change(whalesource) >= 0 ? 0 : whalesource), 14)
+_rsi(upper, lower) =>
+    if lower == 0
+        100
+    if upper == 0
+        0
+	100.0 - (100.0 / (1.0 + upper / lower))
+moneystrength = _rsi(upper, lower)
+moneylevelup = ta.rma(math.max(ta.change(close), 0), 12)
+moneyleveldown = ta.rma(-math.min(ta.change(close), 0), 12)
+price = moneyleveldown == 0 ? 100 : moneylevelup == 0 ? 0 : 100 - (100 / (1 + moneylevelup / moneyleveldown))
+
+plot(moneystrength+WhaleMoneyFlow, "Whale Money Flow", color=#19CD8B)
+plot(price, "Price", color=#EC407A)
+

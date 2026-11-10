@@ -1,0 +1,13 @@
+//////////////////////////////////////////////////////////////
+//Strategy inspired reddit user u/dvdrummer360
+//Buy when RSI dips below 30 and RSISMA is over 50 (Green)
+//////////////////////////////////////////////////////////////
+study(title="RSI-14 + SMA100 RSI-14")
+RSISMA = (sma(rsi(close,14), 100))
+
+hline(70, color=red, linestyle=dashed)
+hline(50, color=black, linestyle=line)
+hline(30, color=green, linestyle=dashed)
+
+plot(rsi(close, 14), color=blue, title="RSI")
+plot(RSISMA, color=RSISMA > 50 ? green : red, style=area, transp=70, title="RSISMA")

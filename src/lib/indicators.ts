@@ -304,12 +304,18 @@ export function vwap(candles: CandleData[]): IndicatorPoint[] {
 }
 
 // ── Indicator Registry (for UI) ──────────────────────────────
-export type IndicatorType = "SMA" | "EMA" | "RSI" | "MACD" | "BOLL" | "ATR" | "STOCH" | "VWAP";
+export type BuiltinIndicatorType = "SMA" | "EMA" | "RSI" | "MACD" | "BOLL" | "ATR" | "STOCH" | "VWAP";
+
+/**
+ * Anything the indicators menu can toggle: a built-in from the registry
+ * below, or a bundled Pine script (`pine:<id>`, see src/pine/registry.ts).
+ */
+export type IndicatorType = BuiltinIndicatorType | `pine:${string}`;
 
 export type IndicatorPane = "overlay" | "below";
 
 export interface IndicatorConfig {
-  type: IndicatorType;
+  type: BuiltinIndicatorType;
   label: string;
   pane: IndicatorPane;
   defaultParams: Record<string, number>;
